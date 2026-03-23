@@ -98,6 +98,9 @@ class PolicyGenerator {
 
         generateAllMatch(outputDir.resolve("all-match-100"), 100);
 
+        generateRbacOpa(outputDir.resolve("rbac-small"));
+        generateRbacExplosion(outputDir.resolve("rbac-large"));
+
         if (large) {
             generateSimple(outputDir.resolve("simple-1000"), 1000);
             generateSimple(outputDir.resolve("simple-5000"), 5000);
@@ -139,6 +142,91 @@ class PolicyGenerator {
         for (var i = 1; i <= count; i++) {
             Files.writeString(dir.resolve("match-%04d.sapl".formatted(i)), ALL_MATCHING_SIMPLE.formatted(i));
         }
+    }
+
+    private static void generateRbacOpa(Path dir) throws IOException {
+        Files.createDirectories(dir);
+        var pdpJson = """
+                {
+                  "algorithm": "DENY_OVERRIDES",
+                  "variables": {
+                    "permissions" : {
+                      "dev" : [
+                          { "type": "foo123", "action": "write" },
+                          { "type": "foo123", "action": "read"  }
+                        ],
+                      "test" : [
+                          { "type": "foo123", "action": "read" }
+                        ]
+                    }
+                  }
+                }
+                """;
+        var policy = """
+                policy "RBAC"
+                permit
+                where
+                    { "type" : resource.type, "action": action } in permissions[(subject.role)];
+                """;
+        Files.writeString(dir.resolve("pdp.json"), pdpJson);
+        Files.writeString(dir.resolve("rbac.sapl"), policy);
+    }
+
+    private static final String[] DEPARTMENTS = { "engineering", "qa", "sales", "marketing", "finance", "hr", "ops",
+            "legal", "security", "support" };
+    private static final String[] LOCATIONS   = { "london", "berlin", "new-york", "singapore", "sydney" };
+    private static final String[] SENIORITIES = { "junior", "senior", "lead", "director" };
+    private static final String[] ACTIONS     = { "read", "write", "delete", "approve" };
+
+    private static void generateRbacExplosion(Path dir) throws IOException {
+        Files.createDirectories(dir);
+        var permissions = new StringBuilder("{\n");
+        var first       = true;
+        for (var dept : DEPARTMENTS) {
+            for (var loc : LOCATIONS) {
+                for (var seniority : SENIORITIES) {
+                    var roleName = dept + "-" + loc + "-" + seniority;
+                    if (!first) {
+                        permissions.append(",\n");
+                    }
+                    first = false;
+                    permissions.append("        \"%s\" : [\n".formatted(roleName));
+                    var perms    = new java.util.ArrayList<String>();
+                    var maxAction = switch (seniority) {
+                        case "junior"   -> 1;
+                        case "senior"   -> 2;
+                        case "lead"     -> 3;
+                        case "director" -> 4;
+                        default         -> 1;
+                    };
+                    for (var a = 0; a < maxAction; a++) {
+                        perms.add("            { \"type\": \"%s-%s\", \"action\": \"%s\" }".formatted(dept, loc, ACTIONS[a]));
+                    }
+                    permissions.append(String.join(",\n", perms));
+                    permissions.append("\n          ]");
+                }
+            }
+        }
+        permissions.append("\n      }");
+
+        var pdpJson = """
+                {
+                  "algorithm": "DENY_OVERRIDES",
+                  "variables": {
+                    "permissions" : %s
+                  }
+                }
+                """.formatted(permissions);
+
+        var policy = """
+                policy "RBAC"
+                permit
+                where
+                    { "type" : resource.type, "action": action } in permissions[(subject.role)];
+                """;
+
+        Files.writeString(dir.resolve("pdp.json"), pdpJson);
+        Files.writeString(dir.resolve("rbac.sapl"), policy);
     }
 
 }
